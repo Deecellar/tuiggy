@@ -46,7 +46,19 @@ jobs:
         uses: zugazagoitia/minify-js@v0.4
         if: ${{ matrix.os == 'ubuntu-latest' }}
         with:
-          directory: docs2/
+          directory: docs2/index.html
+
+      - name: Minimify Page export
+        uses: zugazagoitia/minify-js@v0.4
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        with:
+          directory: docs2/data.js
+
+      - name: Minimify Page export
+        uses: zugazagoitia/minify-js@v0.4
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        with:
+          directory: docs2/main.js
 
       - name: Deploy Github Pages
         if: ${{ matrix.os == 'ubuntu-latest' }}
