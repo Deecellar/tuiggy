@@ -37,7 +37,7 @@ jobs:
       - name: Run Tests
         run: zig build test
 
-      - name: Create Wasm Example
+      - name: Push Docs
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: | 
           mv docs docs2 
