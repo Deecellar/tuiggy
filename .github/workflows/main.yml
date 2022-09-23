@@ -52,4 +52,4 @@ jobs:
         if: ${{ matrix.os == 'ubuntu-latest' }}
         uses: rayluo/github-pages-overwriter@v1.2
         with:
-          source-directory: docc2
+          source-directory: docs2
