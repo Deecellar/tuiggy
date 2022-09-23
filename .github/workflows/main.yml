@@ -46,7 +46,7 @@ jobs:
         uses: zugazagoitia/minify-js@v0.4
         if: ${{ matrix.os == 'ubuntu-latest' }}
         with:
-          directory: docs2/index.html # Who puts directory for a file =)
+          directory: docs2/
 
       - name: Deploy Github Pages
         if: ${{ matrix.os == 'ubuntu-latest' }}
