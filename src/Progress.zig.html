@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Progress.zig - source view</title>
+    <link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAgklEQVR4AWMYWuD7EllJIM4G4g4g5oIJ/odhOJ8wToOxSTXgNxDHoeiBMfA4+wGShjyYOCkG/IGqWQziEzYAoUAeiF9D5U+DxEg14DRU7jWIT5IBIOdCxf+A+CQZAAoopEB7QJwBCBwHiip8UYmRdrAlDpIMgApwQZNnNii5Dq0MBgCxxycBnwEd+wAAAABJRU5ErkJggg=="/>
+    <style>
+      body{
+        font-family: system-ui, -apple-system, Roboto, "Segoe UI", sans-serif;
+        margin: 0;
+        line-height: 1.5;
+      }
+
+      pre > code {
+        display: block;
+        overflow: auto;
+        line-height: normal;
+        margin: 0em;
+      }
+      .tok-kw {
+          color: #333;
+          font-weight: bold;
+      }
+      .tok-str {
+          color: #d14;
+      }
+      .tok-builtin {
+          color: #005C7A;
+      }
+      .tok-comment {
+          color: #545454;
+          font-style: italic;
+      }
+      .tok-fn {
+          color: #900;
+          font-weight: bold;
+      }
+      .tok-null {
+          color: #005C5C;
+      }
+      .tok-number {
+          color: #005C5C;
+      }
+      .tok-type {
+          color: #458;
+          font-weight: bold;
+      }
+      pre {
+        counter-reset: line;
+      }
+      pre .line:before {
+        counter-increment: line;
+        content: counter(line);
+        display: inline-block;
+        padding-right: 1em;
+        width: 2em;
+        text-align: right;
+        color: #999;
+      }
+      
+      .line {
+        width: 100%;
+        display: inline-block;
+      }
+      .line:target {
+        border-top: 1px solid #ccc;
+        border-bottom: 1px solid #ccc;
+        background: #fafafa;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body{
+            background:#222;
+            color: #ccc;
+        }
+        pre > code {
+            color: #ccc;
+            background: #222;
+            border: unset;
+        }
+        .line:target {
+            border-top: 1px solid #444;
+            border-bottom: 1px solid #444;
+            background: #333;
+        }
+        .tok-kw {
+            color: #eee;
+        }
+        .tok-str {
+            color: #2e5;
+        }
+        .tok-builtin {
+            color: #ff894c;
+        }
+        .tok-comment {
+            color: #aa7;
+        }
+        .tok-fn {
+            color: #B1A0F8;
+        }
+        .tok-null {
+            color: #ff8080;
+        }
+        .tok-number {
+            color: #ff8080;
+        }
+        .tok-type {
+            color: #68f;
+        }
+      }
+    </style>
+</head>
+<body>
+<pre><code><span class="line" id="L1"><span class="tok-comment">//! This is a non-allocating, non-fallible, and thread-safe API for printing</span></span>
+<span class="line" id="L2"><span class="tok-comment">//! progress indicators to the terminal.</span></span>
+<span class="line" id="L3"><span class="tok-comment">//! The tradeoff is that users of this API must provide the storage</span></span>
+<span class="line" id="L4"><span class="tok-comment">//! for each `Progress.Node`.</span></span>
+<span class="line" id="L5"><span class="tok-comment">//!</span></span>
+<span class="line" id="L6"><span class="tok-comment">//! This library purposefully keeps its output simple and is ASCII-compatible.</span></span>
+<span class="line" id="L7"><span class="tok-comment">//!</span></span>
+<span class="line" id="L8"><span class="tok-comment">//! Initialize the struct directly, overriding these fields as desired:</span></span>
+<span class="line" id="L9"><span class="tok-comment">//! * `refresh_rate_ms`</span></span>
+<span class="line" id="L10"><span class="tok-comment">//! * `initial_delay_ms`</span></span>
+<span class="line" id="L11"><span class="tok-comment">//! * `dont_print_on_dumb`</span></span>
+<span class="line" id="L12"><span class="tok-comment">//! * `max_width`</span></span>
+<span class="line" id="L13"></span>
+<span class="line" id="L14"><span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">&quot;std&quot;</span>);</span>
+<span class="line" id="L15"><span class="tok-kw">const</span> builtin = <span class="tok-builtin">@import</span>(<span class="tok-str">&quot;builtin&quot;</span>);</span>
+<span class="line" id="L16"><span class="tok-kw">const</span> windows = std.os.windows;</span>
+<span class="line" id="L17"><span class="tok-kw">const</span> testing = std.testing;</span>
+<span class="line" id="L18"><span class="tok-kw">const</span> assert = std.debug.assert;</span>
+<span class="line" id="L19"><span class="tok-kw">const</span> os = std.os;</span>
+<span class="line" id="L20"><span class="tok-kw">const</span> time = std.time;</span>
+<span class="line" id="L21"><span class="tok-kw">const</span> Progress = <span class="tok-builtin">@This</span>();</span>
+<span class="line" id="L22"></span>
+<span class="line" id="L23"><span class="tok-comment">/// `null` if the current node (and its children) should</span></span>
+<span class="line" id="L24"><span class="tok-comment">/// not print on update()</span></span>
+<span class="line" id="L25">terminal: ?std.fs.File = <span class="tok-null">undefined</span>,</span>
+<span class="line" id="L26"></span>
+<span class="line" id="L27"><span class="tok-comment">/// Is this a Windows API terminal (note: this is not the same as being run on Windows</span></span>
+<span class="line" id="L28"><span class="tok-comment">/// because other terminals exist like MSYS/git-bash)</span></span>
+<span class="line" id="L29">is_windows_terminal: <span class="tok-type">bool</span> = <span class="tok-null">false</span>,</span>
+<span class="line" id="L30"></span>
+<span class="line" id="L31"><span class="tok-comment">/// Whether the terminal supports ANSI escape codes.</span></span>
+<span class="line" id="L32">supports_ansi_escape_codes: <span class="tok-type">bool</span> = <span class="tok-null">false</span>,</span>
+<span class="line" id="L33"></span>
+<span class="line" id="L34"><span class="tok-comment">/// If the terminal is &quot;dumb&quot;, don't print output.</span></span>
+<span class="line" id="L35"><span class="tok-comment">/// This can be useful if you don't want to print all</span></span>
+<span class="line" id="L36"><span class="tok-comment">/// the stages of code generation if there are a lot.</span></span>
+<span class="line" id="L37"><span class="tok-comment">/// You should not use it if the user should see output</span></span>
+<span class="line" id="L38"><span class="tok-comment">/// for example showing the user what tests run.</span></span>
+<span class="line" id="L39">dont_print_on_dumb: <span class="tok-type">bool</span> = <span class="tok-null">false</span>,</span>
+<span class="line" id="L40"></span>
+<span class="line" id="L41">root: Node = <span class="tok-null">undefined</span>,</span>
+<span class="line" id="L42"></span>
+<span class="line" id="L43"><span class="tok-comment">/// Keeps track of how much time has passed since the beginning.</span></span>
+<span class="line" id="L44"><span class="tok-comment">/// Used to compare with `initial_delay_ms` and `refresh_rate_ms`.</span></span>
+<span class="line" id="L45">timer: ?time.Timer = <span class="tok-null">null</span>,</span>
+<span class="line" id="L46"></span>
+<span class="line" id="L47"><span class="tok-comment">/// When the previous refresh was written to the terminal.</span></span>
+<span class="line" id="L48"><span class="tok-comment">/// Used to compare with `refresh_rate_ms`.</span></span>
+<span class="line" id="L49">prev_refresh_timestamp: <span class="tok-type">u64</span> = <span class="tok-null">undefined</span>,</span>
+<span class="line" id="L50"></span>
+<span class="line" id="L51"><span class="tok-comment">/// This is the maximum number of bytes that can be written to the terminal each refresh.</span></span>
+<span class="line" id="L52"><span class="tok-comment">/// Anything larger than this is truncated.</span></span>
+<span class="line" id="L53"><span class="tok-comment">// we can bump this up if we need to</span>
+</span>
+<span class="line" id="L54">output_buffer: [<span class="tok-number">256</span>]<span class="tok-type">u8</span> = <span class="tok-null">undefined</span>,</span>
+<span class="line" id="L55">output_buffer_slice: []<span class="tok-type">u8</span> = <span class="tok-null">undefined</span>,</span>
+<span class="line" id="L56"></span>
+<span class="line" id="L57"><span class="tok-comment">/// This is the maximum number of bytes written to the terminal with each refresh.</span></span>
+<span class="line" id="L58"><span class="tok-comment">///</span></span>
+<span class="line" id="L59"><span class="tok-comment">/// It is recommended to leave this as `null` so that `start` can automatically decide an</span></span>
+<span class="line" id="L60"><span class="tok-comment">/// optimal width for the terminal.</span></span>
+<span class="line" id="L61"><span class="tok-comment">///</span></span>
+<span class="line" id="L62"><span class="tok-comment">/// Note that this will be clamped to at least 4 and output will appear malformed if it is &lt; 4.</span></span>
+<span class="line" id="L63">max_width: ?<span class="tok-type">usize</span> = <span class="tok-null">null</span>,</span>
+<span class="line" id="L64"></span>
+<span class="line" id="L65"><span class="tok-comment">/// How many nanoseconds between writing updates to the terminal.</span></span>
+<span class="line" id="L66">refresh_rate_ns: <span class="tok-type">u64</span> = <span class="tok-number">50</span> * time.ns_per_ms,</span>
+<span class="line" id="L67"></span>
+<span class="line" id="L68"><span class="tok-comment">/// How many nanoseconds to keep the output hidden.</span></span>
+<span class="line" id="L69">initial_delay_ns: <span class="tok-type">u64</span> = <span class="tok-number">500</span> * time.ns_per_ms,</span>
+<span class="line" id="L70"></span>
+<span class="line" id="L71">done: <span class="tok-type">bool</span> = <span class="tok-null">true</span>,</span>
+<span class="line" id="L72"></span>
+<span class="line" id="L73"><span class="tok-comment">/// Protects the `refresh` function, as well as `node.recently_updated_child`.</span></span>
+<span class="line" id="L74"><span class="tok-comment">/// Without this, callsites would call `Node.end` and then free `Node` memory</span></span>
+<span class="line" id="L75"><span class="tok-comment">/// while it was still being accessed by the `refresh` function.</span></span>
+<span class="line" id="L76">update_mutex: std.Thread.Mutex = .{},</span>
+<span class="line" id="L77"></span>
+<span class="line" id="L78"><span class="tok-comment">/// Keeps track of how many columns in the terminal have been output, so that</span></span>
+<span class="line" id="L79"><span class="tok-comment">/// we can move the cursor back later.</span></span>
+<span class="line" id="L80">columns_written: <span class="tok-type">usize</span> = <span class="tok-null">undefined</span>,</span>
+<span class="line" id="L81"></span>
+<span class="line" id="L82"><span class="tok-kw">const</span> truncation_suffix = <span class="tok-str">&quot;... &quot;</span>;</span>
+<span class="line" id="L83"></span>
+<span class="line" id="L84"><span class="tok-comment">/// Represents one unit of progress. Each node can have children nodes, or</span></span>
+<span class="line" id="L85"><span class="tok-comment">/// one can use integers with `update`.</span></span>
+<span class="line" id="L86"><span class="tok-kw">pub</span> <span class="tok-kw">const</span> Node = <span class="tok-kw">struct</span> {</span>
+<span class="line" id="L87">    context: *Progress,</span>
+<span class="line" id="L88">    parent: ?*Node,</span>
+<span class="line" id="L89">    <span class="tok-comment">/// The name that will be displayed for this node.</span></span>
+<span class="line" id="L90">    name: []<span class="tok-kw">const</span> <span class="tok-type">u8</span>,</span>
+<span class="line" id="L91">    <span class="tok-comment">/// Must be handled atomically to be thread-safe.</span></span>
+<span class="line" id="L92">    recently_updated_child: ?*Node = <span class="tok-null">null</span>,</span>
+<span class="line" id="L93">    <span class="tok-comment">/// Must be handled atomically to be thread-safe. 0 means null.</span></span>
+<span class="line" id="L94">    unprotected_estimated_total_items: <span class="tok-type">usize</span>,</span>
+<span class="line" id="L95">    <span class="tok-comment">/// Must be handled atomically to be thread-safe.</span></span>
+<span class="line" id="L96">    unprotected_completed_items: <span class="tok-type">usize</span>,</span>
+<span class="line" id="L97"></span>
+<span class="line" id="L98">    <span class="tok-comment">/// Create a new child progress node. Thread-safe.</span></span>
+<span class="line" id="L99">    <span class="tok-comment">/// Call `Node.end` when done.</span></span>
+<span class="line" id="L100">    <span class="tok-comment">/// TODO solve https://github.com/ziglang/zig/issues/2765 and then change this</span></span>
+<span class="line" id="L101">    <span class="tok-comment">/// API to set `self.parent.recently_updated_child` with the return value.</span></span>
+<span class="line" id="L102">    <span class="tok-comment">/// Until that is fixed you probably want to call `activate` on the return value.</span></span>
+<span class="line" id="L103">    <span class="tok-comment">/// Passing 0 for `estimated_total_items` means unknown.</span></span>
+<span class="line" id="L104">    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">start</span>(self: *Node, name: []<span class="tok-kw">const</span> <span class="tok-type">u8</span>, estimated_total_items: <span class="tok-type">usize</span>) Node {</span>
+<span class="line" id="L105">        <span class="tok-kw">return</span> Node{</span>
+<span class="line" id="L106">            .context = self.context,</span>
+<span class="line" id="L107">            .parent = self,</span>
+<span class="line" id="L108">            .name = name,</span>
+<span class="line" id="L109">            .unprotected_estimated_total_items = estimated_total_items,</span>
+<span class="line" id="L110">            .unprotected_completed_items = <span class="tok-number">0</span>,</span>
+<span class="line" id="L111">        };</span>
+<span class="line" id="L112">    }</span>
+<span class="line" id="L113"></span>
+<span class="line" id="L114">    <span class="tok-comment">/// This is the same as calling `start` and then `end` on the returned `Node`. Thread-safe.</span></span>
+<span class="line" id="L115">    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">completeOne</span>(self: *Node) <span class="tok-type">void</span> {</span>
+<span class="line" id="L116">        <span class="tok-kw">if</span> (self.parent) |parent| {</span>
+<span class="line" id="L117">            <span class="tok-builtin">@atomicStore</span>(?*Node, &amp;parent.recently_updated_child, self, .Release);</span>
+<span class="line" id="L118">        }</span>
+<span class="line" id="L119">        _ = <span class="tok-builtin">@atomicRmw</span>(<span class="tok-type">usize</span>, &amp;self.unprotected_completed_items, .Add, <span class="tok-number">1</span>, .Monotonic);</span>
+<span class="line" id="L120">        self.context.maybeRefresh();</span>
+<span class="line" id="L121">    }</span>
+<span class="line" id="L122"></span>
+<span class="line" id="L123">    <span class="tok-comment">/// Finish a started `Node`. Thread-safe.</span></span>
+<span class="line" id="L124">    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">end</span>(self: *Node) <span class="tok-type">void</span> {</span>
+<span class="line" id="L125">        self.context.maybeRefresh();</span>
+<span class="line" id="L126">        <span class="tok-kw">if</span> (self.parent) |parent| {</span>
+<span class="line" id="L127">            {</span>
+<span class="line" id="L128">                self.context.update_mutex.lock();</span>
+<span class="line" id="L129">                <span class="tok-kw">defer</span> self.context.update_mutex.unlock();</span>
+<span class="line" id="L130">                _ = <span class="tok-builtin">@cmpxchgStrong</span>(?*Node, &amp;parent.recently_updated_child, self, <span class="tok-null">null</span>, .Monotonic, .Monotonic);</span>
+<span class="line" id="L131">            }</span>
+<span class="line" id="L132">            parent.completeOne();</span>
+<span class="line" id="L133">        } <span class="tok-kw">else</span> {</span>
+<span class="line" id="L134">            self.context.update_mutex.lock();</span>
+<span class="line" id="L135">            <span class="tok-kw">defer</span> self.context.update_mutex.unlock();</span>
+<span class="line" id="L136">            self.context.done = <span class="tok-null">true</span>;</span>
+<span class="line" id="L137">            self.context.refreshWithHeldLock();</span>
+<span class="line" id="L138">        }</span>
+<span class="line" id="L139">    }</span>
+<span class="line" id="L140"></span>
+<span class="line" id="L141">    <span class="tok-comment">/// Tell the parent node that this node is actively being worked on. Thread-safe.</span></span>
+<span class="line" id="L142">    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">activate</span>(self: *Node) <span class="tok-type">void</span> {</span>
+<span class="line" id="L143">        <span class="tok-kw">if</span> (self.parent) |parent| {</span>
+<span class="line" id="L144">            <span class="tok-builtin">@atomicStore</span>(?*Node, &amp;parent.recently_updated_child, self, .Release);</span>
+<span class="line" id="L145">            self.context.maybeRefresh();</span>
+<span class="line" id="L146">        }</span>
+<span class="line" id="L147">    }</span>
+<span class="line" id="L148"></span>
+<span class="line" id="L149">    <span class="tok-comment">/// Thread-safe. 0 means unknown.</span></span>
+<span class="line" id="L150">    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">setEstimatedTotalItems</span>(self: *Node, count: <span class="tok-type">usize</span>) <span class="tok-type">void</span> {</span>
+<span class="line" id="L151">        <span class="tok-builtin">@atomicStore</span>(<span class="tok-type">usize</span>, &amp;self.unprotected_estimated_total_items, count, .Monotonic);</span>
+<span class="line" id="L152">    }</span>
+<span class="line" id="L153"></span>
+<span class="line" id="L154">    <span class="tok-comment">/// Thread-safe.</span></span>
+<span class="line" id="L155">    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">setCompletedItems</span>(self: *Node, completed_items: <span class="tok-type">usize</span>) <span class="tok-type">void</span> {</span>
+<span class="line" id="L156">        <span class="tok-builtin">@atomicStore</span>(<span class="tok-type">usize</span>, &amp;self.unprotected_completed_items, completed_items, .Monotonic);</span>
+<span class="line" id="L157">    }</span>
+<span class="line" id="L158">};</span>
+<span class="line" id="L159"></span>
+<span class="line" id="L160"><span class="tok-comment">/// Create a new progress node.</span></span>
+<span class="line" id="L161"><span class="tok-comment">/// Call `Node.end` when done.</span></span>
+<span class="line" id="L162"><span class="tok-comment">/// `estimated_total_items` value of 0 means unknown.</span></span>
+<span class="line" id="L163"><span class="tok-comment">///</span></span>
+<span class="line" id="L164"><span class="tok-comment">/// Note that as soon as work is started and progress output is printed,</span></span>
+<span class="line" id="L165"><span class="tok-comment">/// `std.Progress` expects you to lean back and wait and not resize the terminal.</span></span>
+<span class="line" id="L166"><span class="tok-comment">/// Resizing the terminal during progress output may result in malformed output.</span></span>
+<span class="line" id="L167"><span class="tok-comment">// TODO: solve https://github.com/ziglang/zig/issues/2765 and then change this</span>
+</span>
+<span class="line" id="L168"><span class="tok-comment">// API to return Progress rather than accept it as a parameter.</span>
+</span>
+<span class="line" id="L169"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">start</span>(self: *Progress, name: []<span class="tok-kw">const</span> <span class="tok-type">u8</span>, estimated_total_items: <span class="tok-type">usize</span>) *Node {</span>
+<span class="line" id="L170">    <span class="tok-kw">const</span> stderr = std.io.getStdErr();</span>
+<span class="line" id="L171">    self.terminal = <span class="tok-null">null</span>;</span>
+<span class="line" id="L172">    <span class="tok-kw">if</span> (stderr.supportsAnsiEscapeCodes()) {</span>
+<span class="line" id="L173">        self.terminal = stderr;</span>
+<span class="line" id="L174">        self.supports_ansi_escape_codes = <span class="tok-null">true</span>;</span>
+<span class="line" id="L175">    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (builtin.os.tag == .windows <span class="tok-kw">and</span> stderr.isTty()) {</span>
+<span class="line" id="L176">        self.is_windows_terminal = <span class="tok-null">true</span>;</span>
+<span class="line" id="L177">        self.terminal = stderr;</span>
+<span class="line" id="L178">    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (builtin.os.tag != .windows) {</span>
+<span class="line" id="L179">        <span class="tok-comment">// we are in a &quot;dumb&quot; terminal like in acme or writing to a file</span>
+</span>
+<span class="line" id="L180">        self.terminal = stderr;</span>
+<span class="line" id="L181">    }</span>
+<span class="line" id="L182">    self.calculateMaxWidth();</span>
+<span class="line" id="L183">    self.root = Node{</span>
+<span class="line" id="L184">        .context = self,</span>
+<span class="line" id="L185">        .parent = <span class="tok-null">null</span>,</span>
+<span class="line" id="L186">        .name = name,</span>
+<span class="line" id="L187">        .unprotected_estimated_total_items = estimated_total_items,</span>
+<span class="line" id="L188">        .unprotected_completed_items = <span class="tok-number">0</span>,</span>
+<span class="line" id="L189">    };</span>
+<span class="line" id="L190">    self.columns_written = <span class="tok-number">0</span>;</span>
+<span class="line" id="L191">    self.prev_refresh_timestamp = <span class="tok-number">0</span>;</span>
+<span class="line" id="L192">    self.timer = time.Timer.start() <span class="tok-kw">catch</span> <span class="tok-null">null</span>;</span>
+<span class="line" id="L193">    self.done = <span class="tok-null">false</span>;</span>
+<span class="line" id="L194">    <span class="tok-kw">return</span> &amp;self.root;</span>
+<span class="line" id="L195">}</span>
+<span class="line" id="L196"></span>
+<span class="line" id="L197"><span class="tok-kw">fn</span> <span class="tok-fn">calculateMaxWidth</span>(self: *Progress) <span class="tok-type">void</span> {</span>
+<span class="line" id="L198">    <span class="tok-kw">if</span> (self.max_width == <span class="tok-null">null</span>) {</span>
+<span class="line" id="L199">        <span class="tok-kw">if</span> (self.terminal) |terminal| {</span>
+<span class="line" id="L200">            <span class="tok-comment">// choose an optimal width and account for progress output that could have been printed</span>
+</span>
+<span class="line" id="L201">            <span class="tok-comment">// before us by another `std.Progress` instance</span>
+</span>
+<span class="line" id="L202">            <span class="tok-kw">const</span> terminal_width = self.getTerminalWidth(terminal.handle) <span class="tok-kw">catch</span> <span class="tok-number">100</span>;</span>
+<span class="line" id="L203">            <span class="tok-kw">const</span> chars_already_printed = self.getTerminalCursorColumn(terminal) <span class="tok-kw">catch</span> <span class="tok-number">0</span>;</span>
+<span class="line" id="L204">            self.max_width = terminal_width - chars_already_printed;</span>
+<span class="line" id="L205">        } <span class="tok-kw">else</span> {</span>
+<span class="line" id="L206">            self.max_width = <span class="tok-number">100</span>;</span>
+<span class="line" id="L207">        }</span>
+<span class="line" id="L208">    }</span>
+<span class="line" id="L209">    self.max_width = std.math.clamp(</span>
+<span class="line" id="L210">        self.max_width.?,</span>
+<span class="line" id="L211">        truncation_suffix.len, <span class="tok-comment">// make sure we can at least truncate</span>
+</span>
+<span class="line" id="L212">        self.output_buffer.len - <span class="tok-number">1</span>,</span>
+<span class="line" id="L213">    );</span>
+<span class="line" id="L214">}</span>
+<span class="line" id="L215"></span>
+<span class="line" id="L216"><span class="tok-kw">fn</span> <span class="tok-fn">getTerminalWidth</span>(self: Progress, file_handle: os.fd_t) !<span class="tok-type">u16</span> {</span>
+<span class="line" id="L217">    <span class="tok-kw">if</span> (builtin.os.tag == .linux) {</span>
+<span class="line" id="L218">        <span class="tok-comment">// TODO: figure out how to get this working on FreeBSD, macOS etc. too.</span>
+</span>
+<span class="line" id="L219">        <span class="tok-comment">//       they too should have capabilities to figure out the cursor column.</span>
+</span>
+<span class="line" id="L220">        <span class="tok-kw">var</span> winsize: os.linux.winsize = <span class="tok-null">undefined</span>;</span>
+<span class="line" id="L221">        <span class="tok-kw">switch</span> (os.errno(os.linux.ioctl(file_handle, os.linux.T.IOCGWINSZ, <span class="tok-builtin">@ptrToInt</span>(&amp;winsize)))) {</span>
+<span class="line" id="L222">            .SUCCESS =&gt; <span class="tok-kw">return</span> winsize.ws_col,</span>
+<span class="line" id="L223">            <span class="tok-kw">else</span> =&gt; <span class="tok-kw">return</span> <span class="tok-kw">error</span>.Unexpected,</span>
+<span class="line" id="L224">        }</span>
+<span class="line" id="L225">    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (builtin.os.tag == .windows) {</span>
+<span class="line" id="L226">        std.debug.assert(self.is_windows_terminal);</span>
+<span class="line" id="L227">        <span class="tok-kw">var</span> info: windows.CONSOLE_SCREEN_BUFFER_INFO = <span class="tok-null">undefined</span>;</span>
+<span class="line" id="L228">        <span class="tok-kw">if</span> (windows.kernel32.GetConsoleScreenBufferInfo(file_handle, &amp;info) != windows.TRUE)</span>
+<span class="line" id="L229">            <span class="tok-kw">return</span> <span class="tok-kw">error</span>.Unexpected;</span>
+<span class="line" id="L230">        <span class="tok-kw">return</span> <span class="tok-builtin">@intCast</span>(<span class="tok-type">u16</span>, info.dwSize.X);</span>
+<span class="line" id="L231">    } <span class="tok-kw">else</span> {</span>
+<span class="line" id="L232">        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.Unsupported;</span>
+<span class="line" id="L233">    }</span>
+<span class="line" id="L234">}</span>
+<span class="line" id="L235"></span>
+<span class="line" id="L236"><span class="tok-kw">fn</span> <span class="tok-fn">getTerminalCursorColumn</span>(self: Progress, file: std.fs.File) !<span class="tok-type">u16</span> {</span>
+<span class="line" id="L237">    <span class="tok-comment">// TODO: figure out how to get this working on FreeBSD, macOS etc. too.</span>
+</span>
+<span class="line" id="L238">    <span class="tok-comment">//       they too should have termios or capabilities to figure out the terminal width.</span>
+</span>
+<span class="line" id="L239">    <span class="tok-kw">if</span> (builtin.os.tag == .linux <span class="tok-kw">and</span> self.supports_ansi_escape_codes) {</span>
+<span class="line" id="L240">        <span class="tok-comment">// First, disable echo and enable non-canonical mode</span>
+</span>
+<span class="line" id="L241">        <span class="tok-comment">// (so that no enter press required for us to read the output of the escape sequence below)</span>
+</span>
+<span class="line" id="L242">        <span class="tok-kw">const</span> original_termios = <span class="tok-kw">try</span> os.tcgetattr(file.handle);</span>
+<span class="line" id="L243">        <span class="tok-kw">var</span> new_termios = original_termios;</span>
+<span class="line" id="L244">        new_termios.lflag &amp;= ~(os.linux.ECHO | os.linux.ICANON);</span>
+<span class="line" id="L245">        <span class="tok-kw">try</span> os.tcsetattr(file.handle, .NOW, new_termios);</span>
+<span class="line" id="L246">        <span class="tok-kw">defer</span> os.tcsetattr(file.handle, .NOW, original_termios) <span class="tok-kw">catch</span> {</span>
+<span class="line" id="L247">            <span class="tok-comment">// Sorry for ruining your terminal</span>
+</span>
+<span class="line" id="L248">        };</span>
+<span class="line" id="L249"></span>
+<span class="line" id="L250">        <span class="tok-kw">try</span> file.writeAll(<span class="tok-str">&quot;\x1b[6n&quot;</span>);</span>
+<span class="line" id="L251">        <span class="tok-kw">var</span> buf: [<span class="tok-str">&quot;\x1b[65536;65536R&quot;</span>.len]<span class="tok-type">u8</span> = <span class="tok-null">undefined</span>;</span>
+<span class="line" id="L252">        <span class="tok-kw">const</span> output = <span class="tok-kw">try</span> file.reader().readUntilDelimiter(&amp;buf, <span class="tok-str">'R'</span>);</span>
+<span class="line" id="L253">        <span class="tok-kw">var</span> splitter = std.mem.split(<span class="tok-type">u8</span>, output, <span class="tok-str">&quot;;&quot;</span>);</span>
+<span class="line" id="L254">        _ = splitter.next().?; <span class="tok-comment">// skip first half</span>
+</span>
+<span class="line" id="L255">        <span class="tok-kw">const</span> column_half = splitter.next() <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> <span class="tok-kw">error</span>.UnexpectedEnd;</span>
+<span class="line" id="L256">        <span class="tok-kw">const</span> column = <span class="tok-kw">try</span> std.fmt.parseUnsigned(<span class="tok-type">u16</span>, column_half, <span class="tok-number">10</span>);</span>
+<span class="line" id="L257">        <span class="tok-kw">return</span> column - <span class="tok-number">1</span>; <span class="tok-comment">// it's one-based</span>
+</span>
+<span class="line" id="L258">    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (builtin.os.tag == .windows) {</span>
+<span class="line" id="L259">        std.debug.assert(self.is_windows_terminal);</span>
+<span class="line" id="L260">        <span class="tok-kw">var</span> info: windows.CONSOLE_SCREEN_BUFFER_INFO = <span class="tok-null">undefined</span>;</span>
+<span class="line" id="L261">        <span class="tok-kw">if</span> (windows.kernel32.GetConsoleScreenBufferInfo(file.handle, &amp;info) != windows.TRUE)</span>
+<span class="line" id="L262">            <span class="tok-kw">return</span> <span class="tok-kw">error</span>.Unexpected;</span>
+<span class="line" id="L263">        <span class="tok-kw">return</span> <span class="tok-builtin">@intCast</span>(<span class="tok-type">u16</span>, info.dwCursorPosition.X);</span>
+<span class="line" id="L264">    } <span class="tok-kw">else</span> {</span>
+<span class="line" id="L265">        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.Unsupported;</span>
+<span class="line" id="L266">    }</span>
+<span class="line" id="L267">}</span>
+<span class="line" id="L268"></span>
+<span class="line" id="L269"><span class="tok-comment">/// Updates the terminal if enough time has passed since last update. Thread-safe.</span></span>
+<span class="line" id="L270"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">maybeRefresh</span>(self: *Progress) <span class="tok-type">void</span> {</span>
+<span class="line" id="L271">    <span class="tok-kw">if</span> (self.timer) |*timer| {</span>
+<span class="line" id="L272">        <span class="tok-kw">if</span> (!self.update_mutex.tryLock()) <span class="tok-kw">return</span>;</span>
+<span class="line" id="L273">        <span class="tok-kw">defer</span> self.update_mutex.unlock();</span>
+<span class="line" id="L274">        <span class="tok-kw">const</span> now = timer.read();</span>
+<span class="line" id="L275">        <span class="tok-kw">if</span> (now &lt; self.initial_delay_ns) <span class="tok-kw">return</span>;</span>
+<span class="line" id="L276">        <span class="tok-comment">// TODO I have observed this to happen sometimes. I think we need to follow Rust's</span>
+</span>
+<span class="line" id="L277">        <span class="tok-comment">// lead and guarantee monotonically increasing times in the std lib itself.</span>
+</span>
+<span class="line" id="L278">        <span class="tok-kw">if</span> (now &lt; self.prev_refresh_timestamp) <span class="tok-kw">return</span>;</span>
+<span class="line" id="L279">        <span class="tok-kw">if</span> (now - self.prev_refresh_timestamp &lt; self.refresh_rate_ns) <span class="tok-kw">return</span>;</span>
+<span class="line" id="L280">        <span class="tok-kw">return</span> self.refreshWithHeldLock();</span>
+<span class="line" id="L281">    }</span>
+<span class="line" id="L282">}</span>
+<span class="line" id="L283"></span>
+<span class="line" id="L284"><span class="tok-comment">/// Updates the terminal and resets `self.next_refresh_timestamp`. Thread-safe.</span></span>
+<span class="line" id="L285"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">refresh</span>(self: *Progress) <span class="tok-type">void</span> {</span>
+<span class="line" id="L286">    <span class="tok-kw">if</span> (!self.update_mutex.tryLock()) <span class="tok-kw">return</span>;</span>
+<span class="line" id="L287">    <span class="tok-kw">defer</span> self.update_mutex.unlock();</span>
+<span class="line" id="L288"></span>
+<span class="line" id="L289">    <span class="tok-kw">return</span> self.refreshWithHeldLock();</span>
+<span class="line" id="L290">}</span>
+<span class="line" id="L291"></span>
+<span class="line" id="L292"><span class="tok-kw">fn</span> <span class="tok-fn">refreshWithHeldLock</span>(self: *Progress) <span class="tok-type">void</span> {</span>
+<span class="line" id="L293">    <span class="tok-kw">const</span> is_dumb = !self.supports_ansi_escape_codes <span class="tok-kw">and</span> !self.is_windows_terminal;</span>
+<span class="line" id="L294">    <span class="tok-kw">if</span> (is_dumb <span class="tok-kw">and</span> self.dont_print_on_dumb) <span class="tok-kw">return</span>;</span>
+<span class="line" id="L295"></span>
+<span class="line" id="L296">    <span class="tok-kw">const</span> file = self.terminal <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>;</span>
+<span class="line" id="L297"></span>
+<span class="line" id="L298">    <span class="tok-comment">// prepare for printing unprintable characters</span>
+</span>
+<span class="line" id="L299">    self.output_buffer_slice = &amp;self.output_buffer;</span>
+<span class="line" id="L300"></span>
+<span class="line" id="L301">    <span class="tok-kw">var</span> end: <span class="tok-type">usize</span> = <span class="tok-number">0</span>;</span>
+<span class="line" id="L302">    <span class="tok-kw">if</span> (self.columns_written &gt; <span class="tok-number">0</span>) {</span>
+<span class="line" id="L303">        <span class="tok-comment">// restore the cursor position by moving the cursor</span>
+</span>
+<span class="line" id="L304">        <span class="tok-comment">// `columns_written` cells to the left, then clear the rest of the line</span>
+</span>
+<span class="line" id="L305">        <span class="tok-kw">if</span> (self.supports_ansi_escape_codes) {</span>
+<span class="line" id="L306">            end += (std.fmt.bufPrint(self.output_buffer_slice[end..], <span class="tok-str">&quot;\x1b[{d}D&quot;</span>, .{self.columns_written}) <span class="tok-kw">catch</span> <span class="tok-kw">unreachable</span>).len;</span>
+<span class="line" id="L307">            end += (std.fmt.bufPrint(self.output_buffer_slice[end..], <span class="tok-str">&quot;\x1b[0K&quot;</span>, .{}) <span class="tok-kw">catch</span> <span class="tok-kw">unreachable</span>).len;</span>
+<span class="line" id="L308">        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (builtin.os.tag == .windows) winapi: {</span>
+<span class="line" id="L309">            std.debug.assert(self.is_windows_terminal);</span>
+<span class="line" id="L310"></span>
+<span class="line" id="L311">            <span class="tok-kw">var</span> info: windows.CONSOLE_SCREEN_BUFFER_INFO = <span class="tok-null">undefined</span>;</span>
+<span class="line" id="L312">            <span class="tok-kw">if</span> (windows.kernel32.GetConsoleScreenBufferInfo(file.handle, &amp;info) != windows.TRUE)</span>
+<span class="line" id="L313">                <span class="tok-kw">unreachable</span>;</span>
+<span class="line" id="L314"></span>
+<span class="line" id="L315">            <span class="tok-kw">var</span> cursor_pos = windows.COORD{</span>
+<span class="line" id="L316">                .X = info.dwCursorPosition.X - <span class="tok-builtin">@intCast</span>(windows.SHORT, self.columns_written),</span>
+<span class="line" id="L317">                .Y = info.dwCursorPosition.Y,</span>
+<span class="line" id="L318">            };</span>
+<span class="line" id="L319"></span>
+<span class="line" id="L320">            <span class="tok-kw">if</span> (cursor_pos.X &lt; <span class="tok-number">0</span>)</span>
+<span class="line" id="L321">                cursor_pos.X = <span class="tok-number">0</span>;</span>
+<span class="line" id="L322"></span>
+<span class="line" id="L323">            <span class="tok-kw">const</span> fill_chars = <span class="tok-builtin">@intCast</span>(windows.DWORD, info.dwSize.X - cursor_pos.X);</span>
+<span class="line" id="L324"></span>
+<span class="line" id="L325">            <span class="tok-kw">var</span> written: windows.DWORD = <span class="tok-null">undefined</span>;</span>
+<span class="line" id="L326">            <span class="tok-kw">if</span> (windows.kernel32.FillConsoleOutputAttribute(</span>
+<span class="line" id="L327">                file.handle,</span>
+<span class="line" id="L328">                info.wAttributes,</span>
+<span class="line" id="L329">                fill_chars,</span>
+<span class="line" id="L330">                cursor_pos,</span>
+<span class="line" id="L331">                &amp;written,</span>
+<span class="line" id="L332">            ) != windows.TRUE) {</span>
+<span class="line" id="L333">                <span class="tok-comment">// Stop trying to write to this file.</span>
+</span>
+<span class="line" id="L334">                self.terminal = <span class="tok-null">null</span>;</span>
+<span class="line" id="L335">                <span class="tok-kw">break</span> :winapi;</span>
+<span class="line" id="L336">            }</span>
+<span class="line" id="L337">            <span class="tok-kw">if</span> (windows.kernel32.FillConsoleOutputCharacterW(</span>
+<span class="line" id="L338">                file.handle,</span>
+<span class="line" id="L339">                <span class="tok-str">' '</span>,</span>
+<span class="line" id="L340">                fill_chars,</span>
+<span class="line" id="L341">                cursor_pos,</span>
+<span class="line" id="L342">                &amp;written,</span>
+<span class="line" id="L343">            ) != windows.TRUE) <span class="tok-kw">unreachable</span>;</span>
+<span class="line" id="L344"></span>
+<span class="line" id="L345">            <span class="tok-kw">if</span> (windows.kernel32.SetConsoleCursorPosition(file.handle, cursor_pos) != windows.TRUE)</span>
+<span class="line" id="L346">                <span class="tok-kw">unreachable</span>;</span>
+<span class="line" id="L347">        } <span class="tok-kw">else</span> {</span>
+<span class="line" id="L348">            <span class="tok-comment">// we are in a &quot;dumb&quot; terminal like in acme or writing to a file</span>
+</span>
+<span class="line" id="L349">            self.output_buffer_slice[end] = <span class="tok-str">'\n'</span>;</span>
+<span class="line" id="L350">            end += <span class="tok-number">1</span>;</span>
+<span class="line" id="L351">        }</span>
+<span class="line" id="L352"></span>
+<span class="line" id="L353">        self.columns_written = <span class="tok-number">0</span>;</span>
+<span class="line" id="L354">    }</span>
+<span class="line" id="L355"></span>
+<span class="line" id="L356">    <span class="tok-comment">// from here on we will write printable characters. we also make sure the unprintable characters</span>
+</span>
+<span class="line" id="L357">    <span class="tok-comment">// we possibly wrote previously don't affect whether we truncate the line in `bufWrite`.</span>
+</span>
+<span class="line" id="L358">    <span class="tok-kw">const</span> unprintables = end;</span>
+<span class="line" id="L359">    end = <span class="tok-number">0</span>;</span>
+<span class="line" id="L360">    self.output_buffer_slice = self.output_buffer[unprintables..<span class="tok-builtin">@minimum</span>(self.output_buffer.len, unprintables + self.max_width.?)];</span>
+<span class="line" id="L361"></span>
+<span class="line" id="L362">    <span class="tok-kw">if</span> (!self.done) {</span>
+<span class="line" id="L363">        <span class="tok-kw">var</span> need_ellipsis = <span class="tok-null">false</span>;</span>
+<span class="line" id="L364">        <span class="tok-kw">var</span> maybe_node: ?*Node = &amp;self.root;</span>
+<span class="line" id="L365">        <span class="tok-kw">while</span> (maybe_node) |node| {</span>
+<span class="line" id="L366">            <span class="tok-kw">if</span> (need_ellipsis) {</span>
+<span class="line" id="L367">                self.bufWrite(&amp;end, <span class="tok-str">&quot;... &quot;</span>, .{});</span>
+<span class="line" id="L368">            }</span>
+<span class="line" id="L369">            need_ellipsis = <span class="tok-null">false</span>;</span>
+<span class="line" id="L370">            <span class="tok-kw">const</span> estimated_total_items = <span class="tok-builtin">@atomicLoad</span>(<span class="tok-type">usize</span>, &amp;node.unprotected_estimated_total_items, .Monotonic);</span>
+<span class="line" id="L371">            <span class="tok-kw">const</span> completed_items = <span class="tok-builtin">@atomicLoad</span>(<span class="tok-type">usize</span>, &amp;node.unprotected_completed_items, .Monotonic);</span>
+<span class="line" id="L372">            <span class="tok-kw">const</span> current_item = completed_items + <span class="tok-number">1</span>;</span>
+<span class="line" id="L373">            <span class="tok-kw">if</span> (node.name.len != <span class="tok-number">0</span> <span class="tok-kw">or</span> estimated_total_items &gt; <span class="tok-number">0</span>) {</span>
+<span class="line" id="L374">                <span class="tok-kw">if</span> (node.name.len != <span class="tok-number">0</span>) {</span>
+<span class="line" id="L375">                    self.bufWrite(&amp;end, <span class="tok-str">&quot;{s}&quot;</span>, .{node.name});</span>
+<span class="line" id="L376">                    need_ellipsis = <span class="tok-null">true</span>;</span>
+<span class="line" id="L377">                }</span>
+<span class="line" id="L378">                <span class="tok-kw">if</span> (estimated_total_items &gt; <span class="tok-number">0</span>) {</span>
+<span class="line" id="L379">                    <span class="tok-kw">if</span> (need_ellipsis) self.bufWrite(&amp;end, <span class="tok-str">&quot; &quot;</span>, .{});</span>
+<span class="line" id="L380">                    self.bufWrite(&amp;end, <span class="tok-str">&quot;[{d}/{d}] &quot;</span>, .{ current_item, estimated_total_items });</span>
+<span class="line" id="L381">                    need_ellipsis = <span class="tok-null">false</span>;</span>
+<span class="line" id="L382">                } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (completed_items != <span class="tok-number">0</span>) {</span>
+<span class="line" id="L383">                    <span class="tok-kw">if</span> (need_ellipsis) self.bufWrite(&amp;end, <span class="tok-str">&quot; &quot;</span>, .{});</span>
+<span class="line" id="L384">                    self.bufWrite(&amp;end, <span class="tok-str">&quot;[{d}] &quot;</span>, .{current_item});</span>
+<span class="line" id="L385">                    need_ellipsis = <span class="tok-null">false</span>;</span>
+<span class="line" id="L386">                }</span>
+<span class="line" id="L387">            }</span>
+<span class="line" id="L388">            maybe_node = <span class="tok-builtin">@atomicLoad</span>(?*Node, &amp;node.recently_updated_child, .Acquire);</span>
+<span class="line" id="L389">        }</span>
+<span class="line" id="L390">        <span class="tok-kw">if</span> (need_ellipsis) {</span>
+<span class="line" id="L391">            self.bufWrite(&amp;end, <span class="tok-str">&quot;... &quot;</span>, .{});</span>
+<span class="line" id="L392">        }</span>
+<span class="line" id="L393">    }</span>
+<span class="line" id="L394"></span>
+<span class="line" id="L395">    _ = file.write(self.output_buffer[<span class="tok-number">0</span> .. end + unprintables]) <span class="tok-kw">catch</span> {</span>
+<span class="line" id="L396">        <span class="tok-comment">// Stop trying to write to this file once it errors.</span>
+</span>
+<span class="line" id="L397">        self.terminal = <span class="tok-null">null</span>;</span>
+<span class="line" id="L398">    };</span>
+<span class="line" id="L399">    <span class="tok-kw">if</span> (self.timer) |*timer| {</span>
+<span class="line" id="L400">        self.prev_refresh_timestamp = timer.read();</span>
+<span class="line" id="L401">    }</span>
+<span class="line" id="L402">}</span>
+<span class="line" id="L403"></span>
+<span class="line" id="L404"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">log</span>(self: *Progress, <span class="tok-kw">comptime</span> format: []<span class="tok-kw">const</span> <span class="tok-type">u8</span>, args: <span class="tok-kw">anytype</span>) <span class="tok-type">void</span> {</span>
+<span class="line" id="L405">    <span class="tok-kw">const</span> file = self.terminal <span class="tok-kw">orelse</span> {</span>
+<span class="line" id="L406">        std.debug.print(format, args);</span>
+<span class="line" id="L407">        <span class="tok-kw">return</span>;</span>
+<span class="line" id="L408">    };</span>
+<span class="line" id="L409">    self.refresh();</span>
+<span class="line" id="L410">    file.writer().print(format, args) <span class="tok-kw">catch</span> {</span>
+<span class="line" id="L411">        self.terminal = <span class="tok-null">null</span>;</span>
+<span class="line" id="L412">        <span class="tok-kw">return</span>;</span>
+<span class="line" id="L413">    };</span>
+<span class="line" id="L414">    self.columns_written = <span class="tok-number">0</span>;</span>
+<span class="line" id="L415">}</span>
+<span class="line" id="L416"></span>
+<span class="line" id="L417"><span class="tok-kw">fn</span> <span class="tok-fn">bufWrite</span>(self: *Progress, end: *<span class="tok-type">usize</span>, <span class="tok-kw">comptime</span> format: []<span class="tok-kw">const</span> <span class="tok-type">u8</span>, args: <span class="tok-kw">anytype</span>) <span class="tok-type">void</span> {</span>
+<span class="line" id="L418">    <span class="tok-kw">if</span> (std.fmt.bufPrint(self.output_buffer_slice[end.*..], format, args)) |written| {</span>
+<span class="line" id="L419">        <span class="tok-kw">const</span> amt = written.len;</span>
+<span class="line" id="L420">        end.* += amt;</span>
+<span class="line" id="L421">        self.columns_written += amt;</span>
+<span class="line" id="L422">    } <span class="tok-kw">else</span> |err| <span class="tok-kw">switch</span> (err) {</span>
+<span class="line" id="L423">        <span class="tok-kw">error</span>.NoSpaceLeft =&gt; {</span>
+<span class="line" id="L424">            <span class="tok-comment">// truncate the line with a suffix.</span>
+</span>
+<span class="line" id="L425">            <span class="tok-comment">// for example if we have &quot;hello world&quot; (len=11) and 10 is the limit,</span>
+</span>
+<span class="line" id="L426">            <span class="tok-comment">// it would become &quot;hello w... &quot;</span>
+</span>
+<span class="line" id="L427">            self.columns_written += self.output_buffer_slice.len - end.*;</span>
+<span class="line" id="L428">            end.* = self.output_buffer_slice.len;</span>
+<span class="line" id="L429">            std.mem.copy(</span>
+<span class="line" id="L430">                <span class="tok-type">u8</span>,</span>
+<span class="line" id="L431">                self.output_buffer_slice[self.output_buffer_slice.len - truncation_suffix.len ..],</span>
+<span class="line" id="L432">                truncation_suffix,</span>
+<span class="line" id="L433">            );</span>
+<span class="line" id="L434">        },</span>
+<span class="line" id="L435">    }</span>
+<span class="line" id="L436">}</span>
+<span class="line" id="L437"></span>
+<span class="line" id="L438"><span class="tok-comment">// By default these tests are disabled because they use time.sleep()</span>
+</span>
+<span class="line" id="L439"><span class="tok-comment">// and are therefore slow. They also prints bogus progress data to stderr.</span>
+</span>
+<span class="line" id="L440"><span class="tok-kw">const</span> skip_tests = <span class="tok-null">true</span>;</span>
+<span class="line" id="L441"></span>
+<span class="line" id="L442"><span class="tok-kw">test</span> <span class="tok-str">&quot;behavior on buffer overflow&quot;</span> {</span>
+<span class="line" id="L443">    <span class="tok-kw">if</span> (skip_tests)</span>
+<span class="line" id="L444">        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.SkipZigTest;</span>
+<span class="line" id="L445"></span>
+<span class="line" id="L446">    <span class="tok-comment">// uncomment this to move the cursor</span>
+</span>
+<span class="line" id="L447">    <span class="tok-comment">//std.debug.print(&quot;{s}&quot;, .{&quot;A&quot; ** 300});</span>
+</span>
+<span class="line" id="L448"></span>
+<span class="line" id="L449">    <span class="tok-kw">var</span> progress = Progress{};</span>
+<span class="line" id="L450"></span>
+<span class="line" id="L451">    <span class="tok-kw">const</span> long_string = <span class="tok-str">&quot;A&quot;</span> ** <span class="tok-number">300</span>;</span>
+<span class="line" id="L452">    <span class="tok-kw">var</span> node = progress.start(long_string, <span class="tok-number">0</span>);</span>
+<span class="line" id="L453"></span>
+<span class="line" id="L454">    <span class="tok-kw">const</span> speed_factor = time.ns_per_s / <span class="tok-number">4</span>;</span>
+<span class="line" id="L455"></span>
+<span class="line" id="L456">    time.sleep(speed_factor);</span>
+<span class="line" id="L457">    node.activate();</span>
+<span class="line" id="L458">    time.sleep(speed_factor);</span>
+<span class="line" id="L459">    node.end();</span>
+<span class="line" id="L460">}</span>
+<span class="line" id="L461"></span>
+<span class="line" id="L462"><span class="tok-kw">test</span> <span class="tok-str">&quot;multiple tasks with long names&quot;</span> {</span>
+<span class="line" id="L463">    <span class="tok-kw">if</span> (skip_tests)</span>
+<span class="line" id="L464">        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.SkipZigTest;</span>
+<span class="line" id="L465"></span>
+<span class="line" id="L466">    <span class="tok-kw">var</span> progress = Progress{};</span>
+<span class="line" id="L467"></span>
+<span class="line" id="L468">    <span class="tok-kw">const</span> tasks = [_][]<span class="tok-kw">const</span> <span class="tok-type">u8</span>{</span>
+<span class="line" id="L469">        <span class="tok-str">&quot;A&quot;</span> ** <span class="tok-number">99</span>,</span>
+<span class="line" id="L470">        <span class="tok-str">&quot;A&quot;</span> ** <span class="tok-number">100</span>,</span>
+<span class="line" id="L471">        <span class="tok-str">&quot;A&quot;</span> ** <span class="tok-number">101</span>,</span>
+<span class="line" id="L472">        <span class="tok-str">&quot;A&quot;</span> ** <span class="tok-number">102</span>,</span>
+<span class="line" id="L473">        <span class="tok-str">&quot;A&quot;</span> ** <span class="tok-number">103</span>,</span>
+<span class="line" id="L474">    };</span>
+<span class="line" id="L475"></span>
+<span class="line" id="L476">    <span class="tok-kw">const</span> speed_factor = time.ns_per_s / <span class="tok-number">6</span>;</span>
+<span class="line" id="L477"></span>
+<span class="line" id="L478">    <span class="tok-kw">for</span> (tasks) |task| {</span>
+<span class="line" id="L479">        <span class="tok-kw">var</span> node = progress.start(task, <span class="tok-number">3</span>);</span>
+<span class="line" id="L480">        time.sleep(speed_factor);</span>
+<span class="line" id="L481">        node.activate();</span>
+<span class="line" id="L482"></span>
+<span class="line" id="L483">        time.sleep(speed_factor);</span>
+<span class="line" id="L484">        node.completeOne();</span>
+<span class="line" id="L485">        time.sleep(speed_factor);</span>
+<span class="line" id="L486">        node.completeOne();</span>
+<span class="line" id="L487">        time.sleep(speed_factor);</span>
+<span class="line" id="L488">        node.completeOne();</span>
+<span class="line" id="L489"></span>
+<span class="line" id="L490">        node.end();</span>
+<span class="line" id="L491">    }</span>
+<span class="line" id="L492">}</span>
+<span class="line" id="L493"></span>
+<span class="line" id="L494"><span class="tok-kw">test</span> <span class="tok-str">&quot;very short max width&quot;</span> {</span>
+<span class="line" id="L495">    <span class="tok-kw">if</span> (skip_tests)</span>
+<span class="line" id="L496">        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.SkipZigTest;</span>
+<span class="line" id="L497"></span>
+<span class="line" id="L498">    <span class="tok-kw">var</span> progress = Progress{ .max_width = <span class="tok-number">4</span> };</span>
+<span class="line" id="L499"></span>
+<span class="line" id="L500">    <span class="tok-kw">const</span> task = <span class="tok-str">&quot;A&quot;</span> ** <span class="tok-number">300</span>;</span>
+<span class="line" id="L501"></span>
+<span class="line" id="L502">    <span class="tok-kw">const</span> speed_factor = time.ns_per_s / <span class="tok-number">2</span>;</span>
+<span class="line" id="L503"></span>
+<span class="line" id="L504">    <span class="tok-kw">var</span> node = progress.start(task, <span class="tok-number">3</span>);</span>
+<span class="line" id="L505">    time.sleep(speed_factor);</span>
+<span class="line" id="L506">    node.activate();</span>
+<span class="line" id="L507"></span>
+<span class="line" id="L508">    time.sleep(speed_factor);</span>
+<span class="line" id="L509">    node.completeOne();</span>
+<span class="line" id="L510">    time.sleep(speed_factor);</span>
+<span class="line" id="L511">    node.completeOne();</span>
+<span class="line" id="L512"></span>
+<span class="line" id="L513">    node.end();</span>
+<span class="line" id="L514">}</span>
+<span class="line" id="L515"></span>
+<span class="line" id="L516"><span class="tok-kw">test</span> <span class="tok-str">&quot;basic functionality&quot;</span> {</span>
+<span class="line" id="L517">    <span class="tok-kw">if</span> (skip_tests)</span>
+<span class="line" id="L518">        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.SkipZigTest;</span>
+<span class="line" id="L519"></span>
+<span class="line" id="L520">    <span class="tok-kw">var</span> progress = Progress{};</span>
+<span class="line" id="L521">    <span class="tok-kw">const</span> root_node = progress.start(<span class="tok-str">&quot;&quot;</span>, <span class="tok-number">100</span>);</span>
+<span class="line" id="L522">    <span class="tok-kw">defer</span> root_node.end();</span>
+<span class="line" id="L523"></span>
+<span class="line" id="L524">    <span class="tok-kw">const</span> speed_factor = time.ns_per_ms;</span>
+<span class="line" id="L525"></span>
+<span class="line" id="L526">    <span class="tok-kw">const</span> sub_task_names = [_][]<span class="tok-kw">const</span> <span class="tok-type">u8</span>{</span>
+<span class="line" id="L527">        <span class="tok-str">&quot;reticulating splines&quot;</span>,</span>
+<span class="line" id="L528">        <span class="tok-str">&quot;adjusting shoes&quot;</span>,</span>
+<span class="line" id="L529">        <span class="tok-str">&quot;climbing towers&quot;</span>,</span>
+<span class="line" id="L530">        <span class="tok-str">&quot;pouring juice&quot;</span>,</span>
+<span class="line" id="L531">    };</span>
+<span class="line" id="L532">    <span class="tok-kw">var</span> next_sub_task: <span class="tok-type">usize</span> = <span class="tok-number">0</span>;</span>
+<span class="line" id="L533"></span>
+<span class="line" id="L534">    <span class="tok-kw">var</span> i: <span class="tok-type">usize</span> = <span class="tok-number">0</span>;</span>
+<span class="line" id="L535">    <span class="tok-kw">while</span> (i &lt; <span class="tok-number">100</span>) : (i += <span class="tok-number">1</span>) {</span>
+<span class="line" id="L536">        <span class="tok-kw">var</span> node = root_node.start(sub_task_names[next_sub_task], <span class="tok-number">5</span>);</span>
+<span class="line" id="L537">        node.activate();</span>
+<span class="line" id="L538">        next_sub_task = (next_sub_task + <span class="tok-number">1</span>) % sub_task_names.len;</span>
+<span class="line" id="L539"></span>
+<span class="line" id="L540">        node.completeOne();</span>
+<span class="line" id="L541">        time.sleep(<span class="tok-number">5</span> * speed_factor);</span>
+<span class="line" id="L542">        node.completeOne();</span>
+<span class="line" id="L543">        node.completeOne();</span>
+<span class="line" id="L544">        time.sleep(<span class="tok-number">5</span> * speed_factor);</span>
+<span class="line" id="L545">        node.completeOne();</span>
+<span class="line" id="L546">        node.completeOne();</span>
+<span class="line" id="L547">        time.sleep(<span class="tok-number">5</span> * speed_factor);</span>
+<span class="line" id="L548"></span>
+<span class="line" id="L549">        node.end();</span>
+<span class="line" id="L550"></span>
+<span class="line" id="L551">        time.sleep(<span class="tok-number">5</span> * speed_factor);</span>
+<span class="line" id="L552">    }</span>
+<span class="line" id="L553">    {</span>
+<span class="line" id="L554">        <span class="tok-kw">var</span> node = root_node.start(<span class="tok-str">&quot;this is a really long name designed to activate the truncation code. let's find out if it works&quot;</span>, <span class="tok-number">0</span>);</span>
+<span class="line" id="L555">        node.activate();</span>
+<span class="line" id="L556">        time.sleep(<span class="tok-number">10</span> * speed_factor);</span>
+<span class="line" id="L557">        progress.refresh();</span>
+<span class="line" id="L558">        time.sleep(<span class="tok-number">10</span> * speed_factor);</span>
+<span class="line" id="L559">        node.end();</span>
+<span class="line" id="L560">    }</span>
+<span class="line" id="L561">}</span>
+<span class="line" id="L562"></span>
+</code></pre></body>
+</html>
